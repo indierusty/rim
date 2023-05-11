@@ -8,7 +8,7 @@ mod buffer;
 use buffer::Buffer;
 use crossterm::{
     cursor,
-    event::{self, poll, Event, KeyEvent, KeyModifiers},
+    event::{self, poll, Event, KeyEvent},
     terminal::{self, disable_raw_mode, enable_raw_mode, size},
     QueueableCommand, Result,
 };
@@ -44,19 +44,15 @@ impl Rim {
     }
 
     fn process_key(&mut self, key_event: KeyEvent) {
-        if key_event == KeyEvent::new(event::KeyCode::Esc, KeyModifiers::NONE) {
-            self.exit = true;
-        }
-
         match key_event.code {
-            // event::KeyCode::Backspace => todo!(),
-            // event::KeyCode::Enter => todo!(),
+            event::KeyCode::Backspace => self.buf.delete_char(),
+            event::KeyCode::Enter => self.buf.insert_nl(),
             event::KeyCode::Left => self.buf.move_left(),
             event::KeyCode::Right => self.buf.move_right(),
             event::KeyCode::Up => _ = self.buf.move_up(),
             event::KeyCode::Down => _ = self.buf.move_down(),
-            // event::KeyCode::Char(_) => todo!(),
-            // event::KeyCode::Esc => todo!(),
+            event::KeyCode::Char(c) => self.buf.insert_char(c),
+            event::KeyCode::Esc => self.exit = true,
             _ => {}
         }
     }

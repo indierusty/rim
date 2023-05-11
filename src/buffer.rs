@@ -47,6 +47,52 @@ impl Buffer {
         stdout.queue(cursor::Show)?;
         Ok(())
     }
+
+    pub fn insert_nl(&mut self) {
+        // make newline by copying all element of current line starting at cursor x
+        let newline = (self.data[self.y][self.x..]).to_vec();
+        self.data.insert(self.y + 1, newline);
+
+        // trim the current line and push delimenter at end
+        self.data[self.y].truncate(self.x);
+        self.data[self.y].push('\0');
+
+        // move the cursor to point first char of next line
+        self.move_down();
+        self.move_start_of_line();
+    }
+
+    pub fn join_line(&mut self) {
+        if self.y == 0 {
+            return; // no line above to join current line
+        }
+
+        // remove delemeter of line above current line
+        self.data[self.y - 1].pop().unwrap();
+        let above_line_len = self.data[self.y - 1].len();
+        // join current line to above line and remove current line
+        let mut line_to_join = self.data.remove(self.y);
+        self.data[self.y - 1].append(&mut line_to_join);
+
+        // reset cursor position
+        self.move_up();
+        self.x = above_line_len;
+    }
+
+    pub fn insert_char(&mut self, c: char) {
+        self.data[self.y].insert(self.x, c);
+        self.move_right();
+    }
+
+    pub fn delete_char(&mut self) {
+        if self.x > 0 {
+            self.data[self.y].remove(self.x - 1);
+            self.move_left();
+        } else {
+            // join current line to ablove and delete current line
+            self.join_line()
+        }
+    }
 }
 
 /* Cursor Movement */
