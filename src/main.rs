@@ -9,6 +9,7 @@ use buffer::Buffer;
 use crossterm::{
     cursor,
     event::{self, poll, Event, KeyEvent},
+    style,
     terminal::{self, disable_raw_mode, enable_raw_mode, size},
     QueueableCommand, Result,
 };
@@ -20,10 +21,32 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+pub type Window = [Row; 100];
+pub type Row = [char; 1000];
+/* A rect frame inside the main Window */
+#[derive(Clone, Copy)]
+pub struct Frame {
+    start_row: u16, /* where to start printing */
+    start_col: u16,
+    end_row: u16, /* where the row ends exclusive */
+    end_col: u16,
+}
+
+impl Frame {
+    pub fn new(start_row: u16, start_col: u16, end_row: u16, end_col: u16) -> Self {
+        Self {
+            start_row,
+            start_col,
+            end_row,
+            end_col,
+        }
+    }
+}
+
 struct Rim {
     buf: Buffer, /* content of file to edit */
-    win_size_x: usize,
-    win_size_y: usize,
+    window_width: u16,
+    window_height: u16,
     exit: bool,
 }
 
@@ -33,8 +56,8 @@ impl Rim {
 
         Self {
             buf: Buffer::new(Some("test.txt".to_string())),
-            win_size_x: terminal_size.0 as usize,
-            win_size_y: terminal_size.1 as usize,
+            window_width: terminal_size.0,
+            window_height: terminal_size.1,
             exit: false,
         }
     }
@@ -61,22 +84,42 @@ impl Rim {
         let mut stdout = stdout();
         stdout.queue(terminal::Clear(terminal::ClearType::All))?;
 
+        let mut window: Window = [[' '; 1000]; 100];
+        let frame = Some(Frame::new(0, 0, self.window_height, self.window_width));
+
         loop {
             // `poll()` waits for an `Event` for a given time period
-            if poll(Duration::from_millis(200)).unwrap() {
+            if poll(Duration::from_millis(500)).unwrap() {
                 match event::read().unwrap() {
                     Event::Key(key_event) => self.process_key(key_event),
-                    Event::Resize(x, y) => {
-                        self.win_size_x = x as usize;
-                        self.win_size_y = y as usize;
+                    Event::Resize(cols, rows) => {
+                        self.window_width = cols;
+                        self.window_height = rows;
                     }
                     _ => {}
                 }
             } else {
                 // Timeout expired and no `Event` is available
             }
-            self.buf.print(&mut stdout)?;
-            stdout.queue(cursor::MoveTo(self.buf.x(), self.buf.y()))?;
+
+            if let Some(frame) = frame {
+                self.buf.print(&mut window, frame)?;
+
+                stdout.queue(cursor::MoveTo(0, 0))?;
+                stdout.queue(cursor::Hide)?;
+                for row in 0..self.window_height as usize {
+                    for col in 0..self.window_width as usize {
+                        stdout.queue(style::Print(window[row][col]))?;
+                    }
+                    stdout.queue(cursor::MoveToNextLine(1))?;
+                }
+                stdout.queue(cursor::MoveTo(
+                    frame.start_col as u16 + self.buf.col_in_frame(),
+                    frame.start_row as u16 + self.buf.row_in_frame(),
+                ))?;
+            }
+
+            stdout.queue(cursor::Show)?;
 
             stdout.flush()?; // important to execute all cmd in queue
             if self.exit {

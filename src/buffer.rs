@@ -1,14 +1,14 @@
+use crate::{Frame, Window};
 use std::fs;
-use std::io::Stdout;
 use std::path::Path;
-
-use crossterm::{cursor, style, terminal, QueueableCommand};
 
 pub struct Buffer {
     data: Vec<Vec<char>>,
-    name: String, /* path to file to edit */
-    x: usize,     /* cursor pointing to row in data */
-    y: usize,     /* cursor pointing to col in data */
+    name: String,   /* path to file to edit */
+    cur_col: usize, /* cursor pointing to col/char in data */
+    cur_row: usize, /* cursor pointing to row/line in data */
+    buf_row: usize, /* starting row to print */
+    buf_col: usize, /* starting col to print */
 }
 
 impl Buffer {
@@ -28,34 +28,61 @@ impl Buffer {
         Self {
             data,
             name,
-            x: 0,
-            y: 0,
+            cur_col: 0,
+            cur_row: 0,
+            buf_row: 0,
+            buf_col: 0,
         }
     }
 
-    pub fn print(&mut self, stdout: &mut Stdout) -> std::io::Result<()> {
-        stdout.queue(cursor::MoveTo(0, 0))?;
-        stdout.queue(cursor::Hide)?;
+    pub fn print(&mut self, window: &mut Window, frame: Frame) -> std::io::Result<()> {
+        // Important to shift buffer position so cursor remain inside frame
+        self.confine_frame(frame);
 
-        for col in 0..self.data.len() {
-            stdout.queue(terminal::Clear(terminal::ClearType::CurrentLine))?;
-            for row in 0..self.data[col].len() {
-                stdout.queue(style::Print(self.data[col][row]))?;
+        let mut data_row = self.buf_col; /* row pointing in self.data */
+        let mut row = frame.start_row; /* row pointing in window frame */
+        //
+        while row < frame.end_row {
+            //
+            if data_row < self.data.len() {
+                // print row
+                let mut data_col = self.buf_row;
+                let mut col = frame.start_col;
+
+                while col < frame.end_col {
+                    if data_col < self.data[data_row].len() {
+                        window[row as usize][col as usize] = self.data[data_row][data_col];
+                    } else {
+                        window[row as usize][col as usize] = ' ';
+                    }
+                    data_col += 1;
+                    col += 1;
+                }
+            } else {
+                // line is empty hence print a tilde at start
+                window[row as usize][frame.start_col as usize] = '~';
+                // and the rest of line is empty, important erase previous garbage chars
+                let mut col = frame.start_col + 1;
+                while col < frame.end_col {
+                    window[row as usize][col as usize] = ' ';
+                    col += 1;
+                }
             }
-            stdout.queue(cursor::MoveToNextLine(1))?;
+
+            data_row += 1;
+            row += 1;
         }
-        stdout.queue(cursor::Show)?;
         Ok(())
     }
 
     pub fn insert_nl(&mut self) {
         // make newline by copying all element of current line starting at cursor x
-        let newline = (self.data[self.y][self.x..]).to_vec();
-        self.data.insert(self.y + 1, newline);
+        let newline = (self.data[self.cur_row][self.cur_col..]).to_vec();
+        self.data.insert(self.cur_row + 1, newline);
 
         // trim the current line and push delimenter at end
-        self.data[self.y].truncate(self.x);
-        self.data[self.y].push('\0');
+        self.data[self.cur_row].truncate(self.cur_col);
+        self.data[self.cur_row].push('\0');
 
         // move the cursor to point first char of next line
         self.move_down();
@@ -63,30 +90,32 @@ impl Buffer {
     }
 
     pub fn join_line(&mut self) {
-        if self.y == 0 {
+        if self.cur_row == 0 {
             return; // no line above to join current line
         }
 
         // remove delemeter of line above current line
-        self.data[self.y - 1].pop().unwrap();
-        let above_line_len = self.data[self.y - 1].len();
+        self.data[self.cur_row - 1].pop().unwrap();
+        let above_line_len = self.data[self.cur_row - 1].len();
         // join current line to above line and remove current line
-        let mut line_to_join = self.data.remove(self.y);
-        self.data[self.y - 1].append(&mut line_to_join);
+        let mut line_to_join = self.data.remove(self.cur_row);
+        self.data[self.cur_row - 1].append(&mut line_to_join);
 
         // reset cursor position
         self.move_up();
-        self.x = above_line_len;
+        self.cur_col = above_line_len;
     }
 
+    /// insert char at cursor and shifts the cursor right
     pub fn insert_char(&mut self, c: char) {
-        self.data[self.y].insert(self.x, c);
+        self.data[self.cur_row].insert(self.cur_col, c);
         self.move_right();
     }
 
+    /// delete char just behind the cursor and shifts the cursor left
     pub fn delete_char(&mut self) {
-        if self.x > 0 {
-            self.data[self.y].remove(self.x - 1);
+        if self.cur_col > 0 {
+            self.data[self.cur_row].remove(self.cur_col - 1);
             self.move_left();
         } else {
             // join current line to ablove and delete current line
@@ -95,25 +124,52 @@ impl Buffer {
     }
 }
 
-/* Cursor Movement */
+/// Cursor Movement
 impl Buffer {
+    /// shifts row and col cursor until inside of frame window
+    fn confine_frame(&mut self, frame: Frame) {
+        let frame_height = frame.end_row - frame.start_row;
+        let frame_width = frame.end_col - frame.start_col;
+
+        // row
+        while self.cur_row < self.buf_col {
+            self.buf_col -= 1;
+        }
+
+        while self.cur_row > self.buf_col + frame_height as usize - 1 {
+            self.buf_col += 1;
+        }
+
+        // col
+        while self.cur_col < self.buf_row {
+            self.buf_row -= 1;
+        }
+
+        while self.cur_col > self.buf_row + frame_width as usize - 1 {
+            self.buf_row += 1;
+        }
+    }
+
+    /// reset cursor x to point at min of current line len - 1 and previous cursor x
     fn reset_x(&mut self) {
-        // reset cursor x to point at min of current line len - 1 and previous cursor x
-        self.x = self.x.min(self.data[self.y].len() - 1);
+        self.cur_col = self.cur_col.min(self.data[self.cur_row].len() - 1);
     }
 
+    /// shifts cursor to first col in current row
     fn move_start_of_line(&mut self) {
-        self.x = 0;
+        self.cur_col = 0;
     }
 
+    /// shifts cursor to end col in current row
     fn move_end_of_line(&mut self) {
-        self.x = self.data[self.y].len() - 1;
+        self.cur_col = self.data[self.cur_row].len() - 1;
     }
 
+    /// shifts cursor up a row
     pub fn move_up(&mut self) -> bool {
         // if moved a line up return true
-        if self.y > 0 {
-            self.y -= 1;
+        if self.cur_row > 0 {
+            self.cur_row -= 1;
             self.reset_x();
             return true;
         }
@@ -121,10 +177,11 @@ impl Buffer {
         false
     }
 
+    /// shifts cursor down a row
     pub fn move_down(&mut self) -> bool {
         // if moved a line down return true
-        if self.y < self.data.len() - 1 {
-            self.y += 1;
+        if self.cur_row < self.data.len() - 1 {
+            self.cur_row += 1;
             self.reset_x();
             return true;
         }
@@ -132,9 +189,10 @@ impl Buffer {
         false
     }
 
+    /// shifts cursor right a column
     pub fn move_right(&mut self) {
-        if self.x < self.data[self.y].len() - 1 {
-            self.x += 1;
+        if self.cur_col < self.data[self.cur_row].len() - 1 {
+            self.cur_col += 1;
         } else {
             if self.move_down() {
                 self.move_start_of_line();
@@ -142,9 +200,10 @@ impl Buffer {
         }
     }
 
+    /// shifts cursor left a column
     pub fn move_left(&mut self) {
-        if self.x > 0 {
-            self.x -= 1;
+        if self.cur_col > 0 {
+            self.cur_col -= 1;
         } else {
             if self.move_up() {
                 self.move_end_of_line();
@@ -153,17 +212,17 @@ impl Buffer {
     }
 }
 
-/* Getter */
+/// Getters
 impl Buffer {
-    pub fn x(&self) -> u16 {
-        self.x as u16
+    pub fn col_in_frame(&self) -> u16 {
+        (self.cur_col - self.buf_row) as u16
     }
-    pub fn y(&self) -> u16 {
-        self.y as u16
+    pub fn row_in_frame(&self) -> u16 {
+        (self.cur_row - self.buf_col) as u16
     }
 }
 
-/* Helper Functions */
+/// Helper Function
 fn read_buffer(file_path: &str) -> Vec<Vec<char>> {
     /* read each line of file separated by either '\n' || '\r'
     and add '\0' at end of each line */
@@ -178,9 +237,9 @@ fn read_buffer(file_path: &str) -> Vec<Vec<char>> {
         .collect()
 }
 
-/*at least one empty line for buf_x and buf_y to point here x: 0, y: 0
-  pointing at first line and last char which is just delimeter.
-* this avoid index out of bound. */
+/// At least one empty line for buf_x and buf_y to point here x: 0, y: 0
+/// pointing at first line and last char which is just delimeter.
+/// This avoid index out of bound
 fn empty_buffer() -> Vec<Vec<char>> {
     vec![vec!['\0']]
 }
