@@ -1,5 +1,6 @@
-use crate::{Frame, Window};
-use std::fs;
+use crate::rim::{Frame, Window};
+use std::fs::{self, File};
+use std::io::Write;
 use std::path::Path;
 
 pub struct Buffer {
@@ -32,6 +33,30 @@ impl Buffer {
             cur_row: 0,
             buf_row: 0,
             buf_col: 0,
+        }
+    }
+
+    pub fn save(&mut self) {
+        let byte_string: String = self
+            .data
+            .iter()
+            .fold(vec![], |mut acc, line| {
+                acc.extend_from_slice(line.as_slice());
+                acc.pop(); // removes delimeter at end of each line in self.data
+                acc.push('\n'); // nl at the end of every line
+                return acc;
+            })
+            .into_iter()
+            .collect();
+
+        let save_to_file = |mut f: File| {
+            f.write(byte_string.as_bytes()).unwrap();
+        };
+
+        let path = Path::new(&self.name);
+        match File::create(path) {
+            Ok(f) => save_to_file(f),
+            Err(e) => eprintln!("Err creating file: {e}"),
         }
     }
 
