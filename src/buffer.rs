@@ -37,13 +37,17 @@ impl Buffer {
     }
 
     pub fn save(&mut self) {
+        let last_line_index = self.data.len() - 1;
         let byte_string: String = self
             .data
             .iter()
-            .fold(vec![], |mut acc, line| {
+            .enumerate()
+            .fold(vec![], |mut acc, (i, line)| {
                 acc.extend_from_slice(line.as_slice());
                 acc.pop(); // removes delimeter at end of each line in self.data
-                acc.push('\n'); // nl at the end of every line
+                if i != last_line_index {
+                    acc.push('\n'); // nl at the end of every line except last line
+                }
                 return acc;
             })
             .into_iter()
@@ -143,7 +147,7 @@ impl Buffer {
             self.data[self.cur_row].remove(self.cur_col - 1);
             self.move_left();
         } else {
-            // join current line to ablove and delete current line
+            // join current line to above and delete current line
             self.join_line()
         }
     }
